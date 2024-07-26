@@ -1,0 +1,267 @@
+---
+import styles from "@styles/Subscriber.module.scss";
+import MainLayout from "@layouts/MainLayout.astro";
+import Banner from "@components/Banner.astro";
+import ArrowBackIcon from "@icons/arrow_back_FILL0_wght400_GRAD0_opsz24.svg?react";
+import { stripe, getUserPayment, getTierName } from "@config/apis";
+import { appConfig } from "@config/config";
+import Discord from "@icons/discord.svg?react";
+import Arcade from "@icons/sports_esports_24dp_FILL1_wght400_GRAD0_opsz24.svg?react";
+import Public from "@icons/public_24dp.svg?react";
+import UltravioletIcon from "@icons/ultraviolet_icon.svg?react";
+import DeviceHub from "@icons/device_hub_24dp_FILL0_wght400_GRAD0_opsz24.svg?react";
+import ChatBot from "@icons/chatbot.svg?react";
+import Speed from "@icons/speed_24dp_FILL0_wght400_GRAD0_opsz24.svg?react";
+import type Stripe from "stripe";
+import { createStripeCustomer } from "@lib/util";
+
+const { user } = Astro.locals;
+
+let error: string | undefined;
+let stripeSession: Stripe.Response<Stripe.Checkout.Session> | undefined;
+
+if (Astro.request.method === "POST")
+  try {
+    const data = await Astro.request.formData();
+    const tier = data.get("tier")?.toString();
+    // create an invoice
+    let priceId: string | undefined;
+
+    switch (tier) {
+      case "1":
+        // official
+        priceId = appConfig.stripe.priceIds.official;
+        break;
+      case "2":
+        // the meal
+        priceId = appConfig.stripe.priceIds.ultimate;
+        break;
+      case "3":
+        // the meal
+        priceId = appConfig.stripe.priceIds.meal;
+        break;
+    }
+
+    console.log(tier);
+
+    if (priceId === undefined) {
+      Astro.response.status = 400;
+      error = "Invalid plan ID";
+    } else if (!user) {
+      Astro.response.status = 400;
+      error = "You need an account";
+    } else if (!error)
+      try {
+        // create the invoice and redirect
+
+        const proto = ["localhost", "127.0.0.1"].includes(Astro.url.hostname)
+          ? "http:"
+          : "https:";
+
+        if (user.stripe_customer === null)
+          try {
+            // set the customer here!
+            user.stripe_customer = (await createStripeCustomer(user)).id;
+            // Astro.response.status = 500;
+            // error = "ermm";
+            // console.log(user);
+          } catch (err) {
+            Astro.response.status = 500;
+            error =
+              "Sorry! We were unable to create a stripe customer for you! THIS IS A BUG PLEASE REPORT IT";
+            console.error(err);
+          }
+
+        // https://docs.stripe.com/billing/subscriptions/build-subscriptions
+        stripeSession = await stripe.checkout.sessions.create({
+          mode: "subscription",
+          customer: user.stripe_customer as string,
+          line_items: [
+            {
+              price: priceId,
+              // For metered billing, do not pass quantity
+              quantity: 1,
+            },
+          ],
+          success_url:
+            proto +
+            `//${Astro.url.host}/pro/paid?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: proto + `//${Astro.url.host}/pro/tiers`,
+        });
+
+        console.log("checkout session created", stripeSession.id);
+
+        // return Astro.redirect(session.url, 303);
+      } catch (err) {
+        console.error("STRIPE ERROR", err);
+        Astro.response.status = 500;
+        error = "We were unable to create an invoice!";
+      }
+  } catch (err) {
+    console.error(err);
+  }
+
+const payment = user ? await getUserPayment(user.id) : undefined;
+
+const exclusiveError = Astro.url.searchParams.has("vm");
+
+if (!error && exclusiveError) {
+  error = "This feature is exclusive to official & ultimate supporters!";
+}
+---
+
+{exclusiveError && <script>history.pushState({}, "", "/pro/tiers")</script>}
+{
+  stripeSession && (
+    <script
+      is:inline
+      set:html={
+        "location.href=document.querySelector('main').getAttribute('stripe-checkout-url')"
+      }
+    />
+  )
+}
+<MainLayout>
+  <main
+    class={styles.pricing}
+    stripe-checkout-url={stripeSession ? stripeSession.url : undefined}
+  >
+    <Banner error={error} />
+    <div class={styles.tiers}>
+      <div class:list={["page-title", styles.pageTitle]}>
+        {
+          user && (
+            <a
+              class="back-button"
+              href="/pro/dashboard"
+              set:html={ArrowBackIcon}
+            />
+          )
+        }Holy Unblocker Pricing
+      </div>
+      <div class={styles.list}>
+        <div>
+          <div class={styles.title}>Free</div>
+          <div class={styles.price}>$0</div>
+          <div class={styles.features}>
+            <div>
+              <span class={styles.icon} set:html={Public} />
+              <span>All Site Features</span>
+            </div>
+            <div>
+              <span class={styles.icon} set:html={UltravioletIcon} />
+              <span>Ultraviolet</span>
+            </div>
+            <div>
+              <span class={styles.icon} set:html={Arcade} />
+              <span>Arcade</span>
+            </div>
+          </div>
+          <form class={styles.buy}>
+            <input
+              type="submit"
+              class={styles.prettySubmit}
+              data-owned
+              value="YOU HAVE THIS!"
+              disabled
+            />
+          </form>
+        </div>
+        <div>
+          <div class={styles.title}>Official</div>
+          <div class={styles.price}>$5/month</div>
+          <div class={styles.features}>
+            <div>
+              <span>All Free Plan Perks!</span>
+            </div>
+            <div>
+              <span class:list={[styles.icon, styles.ai]} set:html={ChatBot} />
+              <span>AI Chatbot</span>
+            </div>
+            <div>
+              <span
+                class:list={[styles.icon, styles.disc]}
+                set:html={Discord}
+              />
+              <span>Discord Role</span>
+            </div>
+          </div>
+          <form class={styles.buy} method="post">
+            <input type="text" name="tier" value="1" hidden />
+            <input
+              type="submit"
+              class={styles.prettySubmit}
+              data-owned={(payment && payment.tier >= 1) || null}
+              value={!payment || payment.tier < 1 ? "Buy" : "YOU HAVE THIS!"}
+              disabled={!user || (payment && payment.tier >= 1)}
+            />
+          </form>
+        </div>
+        <div>
+          <div class={styles.title}>Ultimate</div>
+          <div class={styles.price}>$10/month</div>
+          <div class={styles.features}>
+            <div>
+              <span>All Free Plan Perks!</span>
+            </div>
+            <div>
+              <span class={styles.icon} set:html={DeviceHub} />
+              <span>Virtual Browser</span>
+            </div>
+            <div>
+              <span class={styles.icon} set:html={Speed} />
+              <span>No Ratelimits</span>
+            </div>
+            <div>
+              <span
+                class:list={[styles.icon, styles.disc]}
+                set:html={Discord}
+              />
+              <span>Discord Role</span>
+            </div>
+            <form class={styles.buy} method="post">
+              <input type="text" name="tier" value="2" hidden />
+              <input
+                type="submit"
+                class={styles.prettySubmit}
+                data-owned={(payment && payment.tier >= 1) || null}
+                value={!payment || payment.tier < 1 ? "Buy" : "YOU HAVE THIS!"}
+                disabled={!user || (payment && payment.tier >= 1)}
+              />
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class={styles.description}>
+      {
+        user ? (
+          <>
+            <p>Current plan: {getTierName(payment?.tier)}</p>
+            <p>
+              You will be asked for your payment details when you make a
+              purchase.
+            </p>
+            <p>Payments are handled by Stripe.</p>
+            <p>
+              NO REFUNDS!!! Unless you are found out to be either below the age
+              of 13 (where we will then delete ur account entirely) or did not
+              mean to purchase Holy Unblocker Premium.
+            </p>
+          </>
+        ) : (
+          <>
+            <p>In order to subscribe, you need to create an account.</p>
+            <a href="/pro/">
+              <input
+                type="button"
+                class={styles.prettySubmit}
+                value="Create an account"
+              />
+            </a>
+          </>
+        )
+      }
+    </div>
+  </main>
+</MainLayout>
